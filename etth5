@@ -1,7 +1,7 @@
 -- ============================================================
--- YBA Controller v7.8 (Kavo UI + Debug AutoSell)
+-- YBA Controller v7.9 (Kavo UI + Multi-Click AutoSell)
 -- ============================================================
-print("[YBA Controller] Загрузка v7.8...")
+print("[YBA Controller] Загрузка v7.9...")
 local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/xHeptc/Kavo-UI-Library/main/source.lua"))()
 
 -- ============================================================
@@ -199,24 +199,16 @@ local function stopAutoFarm()
 end
 
 -- ============================================================
--- 5. AUTOSELL
+-- 5. AUTOSELL (v7.9 — улучшенные клики)
 -- ============================================================
 
--- Проверка: есть ли предметы (расширенная, с логами)
 local function hasItemsInBackpack()
     local bp = LocalPlayer:FindFirstChild("Backpack")
-    if not bp then 
-        print("[AutoSell-Debug] Backpack не найден!")
-        return false 
-    end
-    local count = 0
+    if not bp then return false end
     for _, item in ipairs(bp:GetChildren()) do
-        if item:IsA("Tool") then 
-            count = count + 1
-        end
+        if item:IsA("Tool") then return true end
     end
-    print("[AutoSell-Debug] Предметов в Backpack: " .. count)
-    return count > 0
+    return false
 end
 
 local function findMerchant()
@@ -233,7 +225,6 @@ local function findMerchant()
     return nil, nil
 end
 
--- Плавный полёт к торговцу
 local function flyToMerchant(merchant)
     if not merchant then return false end
     local targetPos = nil
@@ -266,9 +257,19 @@ local function flyToMerchant(merchant)
     return false
 end
 
--- Клик по кнопке через VirtualInputManager (реальный клик мышью)
+-- НОВОЕ: клик по кнопке через 3 способа
 local function clickButton(btn)
     if not btn then return false end
+    
+    -- Способ 1: Activate
+    pcall(function() btn:Activate() end)
+    
+    -- Способ 2: Fire событий
+    pcall(function() btn:Fire("MouseButton1Click") end)
+    pcall(function() btn:Fire("MouseButton1Down") end)
+    pcall(function() btn:Fire("MouseButton1Up") end)
+    
+    -- Способ 3: VirtualInputManager
     if VirtualInputManager then
         local absPos = btn.AbsolutePosition
         local absSize = btn.AbsoluteSize
@@ -279,17 +280,37 @@ local function clickButton(btn)
             task.wait(0.05)
             VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, false, game, 0)
         end)
-        return true
     end
-    pcall(function() btn:Fire("MouseButton1Click") end)
-    pcall(function() btn:Fire("MouseButton1Down") end)
-    pcall(function() btn:Fire("MouseButton1Up") end)
+    
     return true
 end
 
-local function clickByText(searchText)
+-- НОВОЕ: нажатие цифровой клавиши
+local function pressNumberKey(num)
+    if not VirtualInputManager then return end
+    local keyName = "One"
+    if num == 2 then keyName = "Two"
+    elseif num == 3 then keyName = "Three"
+    elseif num == 4 then keyName = "Four"
+    elseif num == 5 then keyName = "Five"
+    elseif num == 6 then keyName = "Six"
+    elseif num == 7 then keyName = "Seven"
+    elseif num == 8 then keyName = "Eight"
+    elseif num == 9 then keyName = "Nine"
+    end
+    local keyCode = Enum.KeyCode[keyName]
+    if not keyCode then return end
+    pcall(function()
+        VirtualInputManager:SendKeyEvent(true, keyCode, false, game)
+        task.wait(0.05)
+        VirtualInputManager:SendKeyEvent(false, keyCode, false, game)
+    end)
+end
+
+-- НОВОЕ: поиск кнопки по тексту (без клика)
+local function findButtonByText(searchText)
     local pg = LocalPlayer:FindFirstChild("PlayerGui")
-    if not pg then return false end
+    if not pg then return nil end
     searchText = searchText:lower()
     for _, gui in ipairs(pg:GetChildren()) do
         for _, obj in ipairs(gui:GetDescendants()) do
@@ -297,14 +318,12 @@ local function clickByText(searchText)
                 local txt = (obj.Text or ""):lower()
                 txt = txt:gsub("<[^>]+>", "")
                 if txt:find(searchText, 1, true) then
-                    print("[AutoSell] Кликаю по: " .. obj.Text .. " | Путь: " .. obj:GetFullName())
-                    clickButton(obj)
-                    return true
+                    return obj
                 end
             end
         end
     end
-    return false
+    return nil
 end
 
 local lastSell = 0
@@ -312,31 +331,16 @@ local isSelling = false
 
 local function autoSellItems(force)
     force = force or false
-    
-    print("[AutoSell-Debug] Вызов. State.AutoSell=" .. tostring(State.AutoSell) .. " isSelling=" .. tostring(isSelling) .. " force=" .. tostring(force))
-    
-    if not force and not State.AutoSell then 
-        print("[AutoSell-Debug] Выход: State.AutoSell выключен")
-        return 
-    end
-    if isSelling then 
-        print("[AutoSell-Debug] Выход: уже идёт продажа")
-        return 
-    end
-    if not hasItemsInBackpack() then 
-        print("[AutoSell-Debug] Выход: нет предметов в Backpack")
-        return 
-    end
-    if not force and tick() - lastSell < SELL_COOLDOWN then 
-        print("[AutoSell-Debug] Выход: кулдаун")
-        return 
-    end
+    if not force and not State.AutoSell then return end
+    if isSelling then return end
+    if not hasItemsInBackpack() then return end
+    if not force and tick() - lastSell < SELL_COOLDOWN then return end
     
     lastSell = tick()
     isSelling = true
     State.Busy = true
 
-    print("[AutoSell] === Начинаю продажу ===")
+    print("[AutoSell] === НАЧАЛО ===")
     local merchant, prompt = findMerchant()
     if not merchant then
         print("[AutoSell] Торговец не найден.")
@@ -348,33 +352,76 @@ local function autoSellItems(force)
         print("[AutoSell] Не долетел.")
         State.Busy = false; isSelling = false; return
     end
-    task.wait(0.4)
+    task.wait(0.5)
 
     print("[AutoSell] Открываю диалог...")
     pcall(function() fireproximityprompt(prompt) end)
-    task.wait(1.8)
+    task.wait(2.5)
 
-    print("[AutoSell] Шаг 1: ищу кнопку начала продажи...")
-    local s1 = clickByText("i'd like to sell")
-    if not s1 then s1 = clickByText("like to sell") end
-    if not s1 then s1 = clickByText("sell this") end
+    -- ЭТАП 1: "I'd like to sell this..."
+    print("[AutoSell] ЭТАП 1: Ищу кнопку 'I'd like to sell...'")
+    local stage1Done = false
+    for attempt = 1, 5 do
+        local btn = findButtonByText("i'd like to sell")
+        if not btn then btn = findButtonByText("like to sell") end
+        if not btn then btn = findButtonByText("sell this") end
+        
+        if btn then
+            print("[AutoSell] Попытка " .. attempt .. ": кликаю по '" .. btn.Text .. "'")
+            clickButton(btn)
+            pressNumberKey(1)
+            task.wait(1.0)
+            
+            if not findButtonByText("i'd like to sell") and not findButtonByText("like to sell") then
+                stage1Done = true
+                print("[AutoSell] Этап 1 пройден (кнопка исчезла)")
+                break
+            end
+        else
+            stage1Done = true
+            print("[AutoSell] Кнопка этапа 1 не найдена — возможно, уже на следующем экране")
+            break
+        end
+    end
 
-    if not s1 then
-        print("[AutoSell] Не нашёл кнопку 1.")
+    if not stage1Done then
+        print("[AutoSell] Этап 1 не удался.")
         State.Busy = false; isSelling = false; return
     end
 
-    task.wait(1.2)
+    task.wait(2.0)
 
-    print("[AutoSell] Шаг 2: ищу кнопку 'Sell ALL'...")
-    local s2 = clickByText("sell all")
-    if not s2 then s2 = clickByText("all of these") end
-    if not s2 then s2 = clickByText("i'll sell") end
+    -- ЭТАП 2: "I'll sell ALL of these."
+    print("[AutoSell] ЭТАП 2: Ищу кнопку 'Sell ALL'")
+    local stage2Done = false
+    for attempt = 1, 5 do
+        local btn = findButtonByText("sell all")
+        if not btn then btn = findButtonByText("all of these") end
+        if not btn then btn = findButtonByText("i'll sell") end
+        
+        if btn then
+            print("[AutoSell] Попытка " .. attempt .. ": кликаю по '" .. btn.Text .. "'")
+            clickButton(btn)
+            pressNumberKey(6)
+            pressNumberKey(5)
+            task.wait(1.0)
+            
+            if not findButtonByText("sell all") and not findButtonByText("all of these") then
+                stage2Done = true
+                print("[AutoSell] Этап 2 пройден!")
+                break
+            end
+        else
+            stage2Done = true
+            print("[AutoSell] Кнопка этапа 2 не найдена — возможно, продажа уже прошла")
+            break
+        end
+    end
 
-    if s2 then
+    if stage2Done then
         print("[AutoSell] === ПРОДАЖА ЗАВЕРШЕНА ===")
     else
-        print("[AutoSell] Не нашёл кнопку 2.")
+        print("[AutoSell] === ПРОДАЖА НЕ УДАЛАСЬ ===")
     end
 
     State.Busy = false
@@ -489,7 +536,7 @@ end)
 -- ============================================================
 -- 9. KAVO UI
 -- ============================================================
-local Window = Library.CreateLib("YBA Controller | v7.8", "BloodTheme")
+local Window = Library.CreateLib("YBA Controller | v7.9", "BloodTheme")
 
 local FarmTab = Window:NewTab("AutoFarm")
 local FarmSec = FarmTab:NewSection("Автоматизация")
@@ -555,17 +602,15 @@ ItemsSec:NewDropdown("Добавить предмет", "В TARGET_ITEMS", allIt
     print("[YBA] Добавлен: " .. sel)
 end)
 
--- Принудительный запуск продажи
 ItemsSec:NewButton("🧪 Тест: продать сейчас", "Принудительно запустить продажу", function()
     lastSell = 0
     isSelling = false
     State.Busy = false
-    State.AutoSell = true  -- Включаем принудительно
+    State.AutoSell = true
     print("[Test] Ручной запуск AutoSell (force mode)...")
     task.spawn(function() autoSellItems(true) end)
 end)
 
--- Debug: содержимое Backpack
 ItemsSec:NewButton("🔍 Debug: что в Backpack?", "Показать все предметы в инвентаре", function()
     print("=== Содержимое Backpack ===")
     local bp = LocalPlayer:FindFirstChild("Backpack")
@@ -579,7 +624,6 @@ ItemsSec:NewButton("🔍 Debug: что в Backpack?", "Показать все �
     print("===========================")
 end)
 
--- Debug: видимые кнопки в диалоге
 ItemsSec:NewButton("Debug: Показать ВИДИМЫЕ кнопки", "Откройте диалог и нажмите", function()
     print("=== ВИДИМЫЕ КНОПКИ ===")
     local pg = LocalPlayer:FindFirstChild("PlayerGui")
@@ -597,10 +641,10 @@ end)
 
 local InfoTab = Window:NewTab("Info")
 local InfoSec = InfoTab:NewSection("О скрипте")
-InfoSec:NewLabel("YBA Controller v7.8")
-InfoSec:NewLabel("AutoSell: клик через VirtualInputManager")
-InfoSec:NewLabel("Шаг 1: 'I'd like to sell this...'")
-InfoSec:NewLabel("Шаг 2: 'I'll sell ALL of these.'")
+InfoSec:NewLabel("YBA Controller v7.9")
+InfoSec:NewLabel("AutoSell: 3 способа клика + цифры")
+InfoSec:NewLabel("Попыток на этап: 5")
+InfoSec:NewLabel("Проверка исчезновения кнопки после клика")
 InfoSec:NewLabel("Кнопки Debug во вкладке Items")
 
-print("[YBA Controller] v7.8 загружена. Все Debug-инструменты доступны.")
+print("[YBA Controller] v7.9 загружена. Улучшенный AutoSell активен.")
