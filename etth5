@@ -1,7 +1,7 @@
 -- ============================================================
--- YBA Controller v7.6 (Kavo UI + Smooth Fly to Merchant)
+-- YBA Controller v7.7 (Kavo UI + Real Click AutoSell)
 -- ============================================================
-print("[YBA Controller] Загрузка v7.6...")
+print("[YBA Controller] Загрузка v7.7...")
 local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/xHeptc/Kavo-UI-Library/main/source.lua"))()
 
 -- ============================================================
@@ -18,19 +18,13 @@ local TARGET_ITEMS = {
 local LUCKY_ARROW_PRICE = 75000
 local PICKUP_COOLDOWN = 0.5
 local SELL_COOLDOWN = 5
-local FLY_TO_MERCHANT_SPEED = 80  -- Скорость полёта к торговцу
+local FLY_TO_MERCHANT_SPEED = 80
 
 local State = {
-    ESP = true,
-    AutoFarm = false,
-    AutoSell = false,
-    Noclip = false,
-    Speed = false,
-    AutoBuyLucky = false,
-    FlySpeed = 80,
-    PickupRange = 5,
-    WalkSpeed = 30,
-    Busy = false, -- флаг: занят полётом к торговцу
+    ESP = true, AutoFarm = false, AutoSell = false,
+    Noclip = false, Speed = false, AutoBuyLucky = false,
+    FlySpeed = 80, PickupRange = 5, WalkSpeed = 30,
+    Busy = false,
 }
 
 -- ============================================================
@@ -41,6 +35,11 @@ local Workspace = game:GetService("Workspace")
 local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
 
+local VirtualInputManager = nil
+pcall(function()
+    VirtualInputManager = game:GetService("VirtualInputManager")
+end)
+
 -- ============================================================
 -- 3. ESP
 -- ============================================================
@@ -48,24 +47,23 @@ local espObjects = {}
 
 local function createESP(part, itemName)
     if not part or espObjects[part] then return end
-    local billboard = Instance.new("BillboardGui")
-    billboard.Name = "YBA_ItemESP"
-    billboard.Size = UDim2.new(0, 200, 0, 50)
-    billboard.StudsOffset = Vector3.new(0, 3, 0)
-    billboard.AlwaysOnTop = true
-    billboard.Adornee = part
-    billboard.Parent = part
-
-    local textLabel = Instance.new("TextLabel")
-    textLabel.Size = UDim2.new(1, 0, 1, 0)
-    textLabel.BackgroundTransparency = 1
-    textLabel.Text = itemName
-    textLabel.TextColor3 = Color3.fromRGB(255, 215, 0)
-    textLabel.TextStrokeTransparency = 0
-    textLabel.TextScaled = true
-    textLabel.Font = Enum.Font.SourceSansBold
-    textLabel.Parent = billboard
-    espObjects[part] = billboard
+    local bb = Instance.new("BillboardGui")
+    bb.Name = "YBA_ItemESP"
+    bb.Size = UDim2.new(0, 200, 0, 50)
+    bb.StudsOffset = Vector3.new(0, 3, 0)
+    bb.AlwaysOnTop = true
+    bb.Adornee = part
+    bb.Parent = part
+    local tl = Instance.new("TextLabel")
+    tl.Size = UDim2.new(1, 0, 1, 0)
+    tl.BackgroundTransparency = 1
+    tl.Text = itemName
+    tl.TextColor3 = Color3.fromRGB(255, 215, 0)
+    tl.TextStrokeTransparency = 0
+    tl.TextScaled = true
+    tl.Font = Enum.Font.SourceSansBold
+    tl.Parent = bb
+    espObjects[part] = bb
 end
 
 local function clearAllESP()
@@ -76,33 +74,30 @@ local function clearAllESP()
 end
 
 local function getValidItems()
-    local validItems = {}
-    local itemsFolder = Workspace:FindFirstChild("Item_Spawns")
-    if not itemsFolder then return validItems end
-    local items = itemsFolder:FindFirstChild("Items")
-    if not items then return validItems end
-
+    local out = {}
+    local folder = Workspace:FindFirstChild("Item_Spawns")
+    if not folder then return out end
+    local items = folder:FindFirstChild("Items")
+    if not items then return out end
     for _, model in ipairs(items:GetChildren()) do
         if model:IsA("Model") then
             local prompt = model:FindFirstChildOfClass("ProximityPrompt")
             if prompt and prompt.ActionText == "Pick Up" then
-                local itemName = prompt.ObjectText
                 local mesh = model:FindFirstChildOfClass("MeshPart") or model:FindFirstChildOfClass("BasePart")
                 if mesh and mesh.Transparency < 1 then
-                    table.insert(validItems, {model = model, prompt = prompt, mesh = mesh, name = itemName})
+                    table.insert(out, {model = model, prompt = prompt, mesh = mesh, name = prompt.ObjectText})
                 end
             end
         end
     end
-    return validItems
+    return out
 end
 
 local function scanForItems()
     if not State.ESP then return end
-    local items = getValidItems()
-    for _, data in ipairs(items) do
-        for _, targetName in ipairs(TARGET_ITEMS) do
-            if string.find(data.name:lower(), targetName:lower(), 1, true) then
+    for _, data in ipairs(getValidItems()) do
+        for _, name in ipairs(TARGET_ITEMS) do
+            if string.find(data.name:lower(), name:lower(), 1, true) then
                 createESP(data.mesh, data.name)
                 break
             end
@@ -120,23 +115,19 @@ local function cleanupESP()
 end
 
 -- ============================================================
--- 4. AUTOFARM (с учётом State.Busy)
+-- 4. AUTOFARM
 -- ============================================================
 local function findNearestItem()
     local char = LocalPlayer.Character
     if not char then return nil end
     local root = char:FindFirstChild("HumanoidRootPart")
     if not root then return nil end
-
     local nearest, minDist = nil, math.huge
-    local items = getValidItems()
-    for _, data in ipairs(items) do
-        for _, targetName in ipairs(TARGET_ITEMS) do
-            if string.find(data.name:lower(), targetName:lower(), 1, true) then
+    for _, data in ipairs(getValidItems()) do
+        for _, name in ipairs(TARGET_ITEMS) do
+            if string.find(data.name:lower(), name:lower(), 1, true) then
                 local dist = (data.mesh.Position - root.Position).Magnitude
-                if dist < minDist then
-                    nearest, minDist = data, dist
-                end
+                if dist < minDist then nearest, minDist = data, dist end
                 break
             end
         end
@@ -144,32 +135,29 @@ local function findNearestItem()
     return nearest
 end
 
-local flyConnection = nil
+local flyConn = nil
 local cachedTarget = nil
-local lastScanTime = 0
-local lastPickupTime = 0
+local lastScan = 0
+local lastPickup = 0
 
 local function startAutoFarm()
-    if flyConnection then return end
-    flyConnection = RunService.Heartbeat:Connect(function(dt)
-        if not State.AutoFarm then return end
-        -- Если AutoSell занят полётом к торговцу, не мешаем
-        if State.Busy then return end
-
+    if flyConn then return end
+    flyConn = RunService.Heartbeat:Connect(function(dt)
+        if not State.AutoFarm or State.Busy then return end
         local char = LocalPlayer.Character
         if not char then return end
         local root = char:FindFirstChild("HumanoidRootPart")
         if not root then return end
 
-        if tick() - lastPickupTime < PICKUP_COOLDOWN then
+        if tick() - lastPickup < PICKUP_COOLDOWN then
             root.AssemblyLinearVelocity = Vector3.zero
             return
         end
 
         local now = tick()
-        if now - lastScanTime > 0.5 or not cachedTarget or not cachedTarget.mesh.Parent then
+        if now - lastScan > 0.5 or not cachedTarget or not cachedTarget.mesh.Parent then
             cachedTarget = findNearestItem()
-            lastScanTime = now
+            lastScan = now
         end
 
         local target = cachedTarget
@@ -183,10 +171,10 @@ local function startAutoFarm()
             if fireproximityprompt then
                 pcall(function() fireproximityprompt(target.prompt) end)
                 print("[AutoFarm] Подобрал: " .. target.name)
-                lastPickupTime = tick()
+                lastPickup = tick()
             end
             cachedTarget = nil
-            lastScanTime = 0
+            lastScan = 0
             return
         end
 
@@ -201,9 +189,8 @@ local function startAutoFarm()
 end
 
 local function stopAutoFarm()
-    if flyConnection then flyConnection:Disconnect(); flyConnection = nil end
-    cachedTarget = nil
-    lastScanTime = 0
+    if flyConn then flyConn:Disconnect(); flyConn = nil end
+    cachedTarget = nil; lastScan = 0
     local char = LocalPlayer.Character
     if char then
         local root = char:FindFirstChild("HumanoidRootPart")
@@ -212,41 +199,35 @@ local function stopAutoFarm()
 end
 
 -- ============================================================
--- 5. AUTOSELL (плавный полёт вместо телепорта)
+-- 5. AUTOSELL (V7.7: клик по координатам + 2 шага)
 -- ============================================================
 
 local function hasItemsInBackpack()
-    local backpack = LocalPlayer:FindFirstChild("Backpack")
-    if not backpack then return false end
-    for _, item in ipairs(backpack:GetChildren()) do
+    local bp = LocalPlayer:FindFirstChild("Backpack")
+    if not bp then return false end
+    for _, item in ipairs(bp:GetChildren()) do
         if item:IsA("Tool") then return true end
     end
     return false
 end
 
 local function findMerchant()
-    local dialogues = Workspace:FindFirstChild("Dialogues")
-    if not dialogues then return nil, nil end
-    
-    for _, obj in ipairs(dialogues:GetChildren()) do
-        if obj:IsA("Model") then
-            local name = obj.Name:lower()
-            if name:find("merchant") then
-                local prompt = obj:FindFirstChildOfClass("ProximityPrompt")
-                if prompt and prompt.ActionText == "Interact" then
-                    return obj, prompt
-                end
+    local d = Workspace:FindFirstChild("Dialogues")
+    if not d then return nil, nil end
+    for _, obj in ipairs(d:GetChildren()) do
+        if obj:IsA("Model") and obj.Name:lower():find("merchant") then
+            local prompt = obj:FindFirstChildOfClass("ProximityPrompt")
+            if prompt and prompt.ActionText == "Interact" then
+                return obj, prompt
             end
         end
     end
     return nil, nil
 end
 
--- НОВАЯ ФУНКЦИЯ: плавный полёт к торговцу (как в AutoFarm)
+-- Плавный полёт к торговцу
 local function flyToMerchant(merchant)
     if not merchant then return false end
-    
-    -- Определяем позицию торговца
     local targetPos = nil
     if merchant.PrimaryPart then
         targetPos = merchant.PrimaryPart.Position
@@ -255,54 +236,70 @@ local function flyToMerchant(merchant)
         if part then targetPos = part.Position end
     end
     if not targetPos then return false end
-    
+
     local startTime = tick()
-    local maxTime = 15 -- максимум 15 секунд на полёт
-    
-    while tick() - startTime < maxTime do
+    while tick() - startTime < 15 do
         local char = LocalPlayer.Character
         if not char then return false end
         local root = char:FindFirstChild("HumanoidRootPart")
         if not root then return false end
-        
         local dist = (targetPos - root.Position).Magnitude
-        
-        -- Достигли торговца (близко)
-        if dist < 6 then
+        if dist < 7 then
             root.AssemblyLinearVelocity = Vector3.zero
             return true
         end
-        
-        -- Плавное движение
         local dir = (targetPos - root.Position).Unit
-        local step = math.min(FLY_TO_MERCHANT_SPEED * 0.03, dist - 5)
+        local step = math.min(FLY_TO_MERCHANT_SPEED * 0.03, dist - 6)
         local newPos = root.Position + dir * step
         root.CFrame = CFrame.new(newPos, newPos + dir)
         root.AssemblyLinearVelocity = Vector3.zero
-        
         RunService.Heartbeat:Wait()
     end
-    
-    return false -- не успели долететь за 15 сек
+    return false
 end
 
--- Нажатие кнопки по тексту
-local function clickButtonByText(searchText)
-    local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
-    if not playerGui then return false end
+-- НОВОЕ: клик по кнопке через VirtualInputManager (реальный клик мышью)
+local function clickButton(btn)
+    if not btn then return false end
     
-    for _, gui in ipairs(playerGui:GetChildren()) do
-        if gui.Enabled then
-            for _, obj in ipairs(gui:GetDescendants()) do
-                if obj:IsA("TextButton") and obj.Visible then
-                    local txt = (obj.Text or ""):lower()
-                    if txt:find(searchText:lower(), 1, true) then
-                        obj:Fire("MouseButton1Click")
-                        obj:Fire("MouseButton1Down")
-                        obj:Fire("MouseButton1Up")
-                        print("[AutoSell] Нажал кнопку: " .. obj.Text)
-                        return true
-                    end
+    -- Способ 1: реальный клик мышью по центру кнопки
+    if VirtualInputManager then
+        local absPos = btn.AbsolutePosition
+        local absSize = btn.AbsoluteSize
+        local centerX = absPos.X + absSize.X / 2
+        local centerY = absPos.Y + absSize.Y / 2
+        
+        pcall(function()
+            VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, true, game, 0)
+            task.wait(0.05)
+            VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, false, game, 0)
+        end)
+        return true
+    end
+    
+    -- Способ 2 (запасной): Fire
+    pcall(function() btn:Fire("MouseButton1Click") end)
+    pcall(function() btn:Fire("MouseButton1Down") end)
+    pcall(function() btn:Fire("MouseButton1Up") end)
+    return true
+end
+
+-- Ищем видимую кнопку с заданным текстом и кликаем по ней
+local function clickByText(searchText)
+    local pg = LocalPlayer:FindFirstChild("PlayerGui")
+    if not pg then return false end
+    searchText = searchText:lower()
+    
+    for _, gui in ipairs(pg:GetChildren()) do
+        for _, obj in ipairs(gui:GetDescendants()) do
+            if obj:IsA("TextButton") and obj.Visible and obj.AbsoluteSize.X > 0 then
+                local txt = (obj.Text or ""):lower()
+                -- Учитываем RichText (убираем теги)
+                txt = txt:gsub("<[^>]+>", "")
+                if txt:find(searchText, 1, true) then
+                    print("[AutoSell] Кликаю по: " .. obj.Text .. " | Путь: " .. obj:GetFullName())
+                    clickButton(obj)
+                    return true
                 end
             end
         end
@@ -310,70 +307,63 @@ local function clickButtonByText(searchText)
     return false
 end
 
-local lastSellAttempt = 0
+local lastSell = 0
 local isSelling = false
 
 local function autoSellItems()
     if not State.AutoSell then return end
-    if isSelling then return end -- не запускаем дважды
+    if isSelling then return end
     if not hasItemsInBackpack() then return end
-    if tick() - lastSellAttempt < SELL_COOLDOWN then return end
-    lastSellAttempt = tick()
+    if tick() - lastSell < SELL_COOLDOWN then return end
+    lastSell = tick()
     isSelling = true
-    State.Busy = true -- Автофарм перестанет двигать персонажа
-    
-    print("[AutoSell] Есть предметы. Ищу торговца...")
+    State.Busy = true
+
+    print("[AutoSell] === Начинаю продажу ===")
     local merchant, prompt = findMerchant()
     if not merchant then
         print("[AutoSell] Торговец не найден.")
-        State.Busy = false
-        isSelling = false
-        return
+        State.Busy = false; isSelling = false; return
     end
-    print("[AutoSell] Найден торговец: " .. merchant.Name)
-    
-    -- 1. ПЛАВНО ЛЕТИМ к торговцу (вместо телепорта)
-    print("[AutoSell] Лечу к торговцу...")
-    local ok = flyToMerchant(merchant)
-    if not ok then
-        print("[AutoSell] Не смог долететь до торговца.")
-        State.Busy = false
-        isSelling = false
-        return
+    print("[AutoSell] Торговец: " .. merchant.Name)
+
+    -- 1. Летим к торговцу
+    if not flyToMerchant(merchant) then
+        print("[AutoSell] Не долетел.")
+        State.Busy = false; isSelling = false; return
     end
-    
-    task.wait(0.3)
-    
+    task.wait(0.4)
+
     -- 2. Открываем диалог
     print("[AutoSell] Открываю диалог...")
     pcall(function() fireproximityprompt(prompt) end)
-    task.wait(1.5)
-    
-    -- 3. Шаг 1: "Yes, I have any to sell..."
-    local step1 = clickButtonByText("yes, i have any to sell")
-    if not step1 then
-        step1 = clickButtonByText("i'd like to sell")
+    task.wait(1.8) -- ждём загрузки GUI
+
+    -- 3. Шаг 1: "I'd like to sell this..."
+    print("[AutoSell] Шаг 1: ищу кнопку начала продажи...")
+    local s1 = clickByText("i'd like to sell")
+    if not s1 then s1 = clickByText("like to sell") end
+    if not s1 then s1 = clickByText("sell this") end
+
+    if not s1 then
+        print("[AutoSell] Не нашёл кнопку 1.")
+        State.Busy = false; isSelling = false; return
     end
-    if not step1 then
-        step1 = clickButtonByText("any to sell")
-    end
-    
-    if step1 then
-        task.wait(1)
-        -- 4. Шаг 2: "I'll sell ALL of these."
-        local step2 = clickButtonByText("sell all")
-        if not step2 then
-            step2 = clickButtonByText("all of these")
-        end
-        if step2 then
-            print("[AutoSell] Продажа успешно завершена!")
-        else
-            print("[AutoSell] Не найдена кнопка 'Sell ALL'")
-        end
+
+    task.wait(1.2) -- ждём второе окно
+
+    -- 4. Шаг 2: "I'll sell ALL of these."
+    print("[AutoSell] Шаг 2: ищу кнопку 'Sell ALL'...")
+    local s2 = clickByText("sell all")
+    if not s2 then s2 = clickByText("all of these") end
+    if not s2 then s2 = clickByText("i'll sell") end
+
+    if s2 then
+        print("[AutoSell] === ПРОДАЖА ЗАВЕРШЕНА ===")
     else
-        print("[AutoSell] Не найдена кнопка начала продажи.")
+        print("[AutoSell] Не нашёл кнопку 2.")
     end
-    
+
     State.Busy = false
     isSelling = false
 end
@@ -382,33 +372,28 @@ end
 -- 6. АВТОПОКУПКА LUCKY ARROW
 -- ============================================================
 local function getPlayerMoney()
-    local leaderstats = LocalPlayer:FindFirstChild("leaderstats")
-    if leaderstats then
-        local cash = leaderstats:FindFirstChild("Cash") or leaderstats:FindFirstChild("Money")
-        if cash and cash:IsA("IntValue") then return cash.Value end
+    local ls = LocalPlayer:FindFirstChild("leaderstats")
+    if ls then
+        local c = ls:FindFirstChild("Cash") or ls:FindFirstChild("Money")
+        if c and c:IsA("IntValue") then return c.Value end
     end
-    local attr = LocalPlayer:GetAttribute("Money") or LocalPlayer:GetAttribute("Cash")
-    if typeof(attr) == "number" then return attr end
+    local a = LocalPlayer:GetAttribute("Money") or LocalPlayer:GetAttribute("Cash")
+    if typeof(a) == "number" then return a end
     return nil
 end
 
 local function findSellRemote()
-    local plr = LocalPlayer
-    if plr and plr.Character then
-        for _, obj in pairs(plr.Character:GetChildren()) do
-            if obj:IsA("RemoteEvent") then return obj end
+    local c = LocalPlayer.Character
+    if c then
+        for _, o in pairs(c:GetChildren()) do
+            if o:IsA("RemoteEvent") then return o end
         end
     end
-    local places = { Workspace, game:GetService("ReplicatedStorage") }
-    for _, place in pairs(places) do
-        if place then
-            for _, obj in pairs(place:GetDescendants()) do
-                if obj:IsA("RemoteEvent") then
-                    local n = obj.Name:lower()
-                    if n:find("remote") or n:find("sell") or n:find("server") then
-                        return obj
-                    end
-                end
+    for _, p in pairs({Workspace, game:GetService("ReplicatedStorage")}) do
+        for _, o in pairs(p:GetDescendants()) do
+            if o:IsA("RemoteEvent") then
+                local n = o.Name:lower()
+                if n:find("remote") or n:find("sell") or n:find("server") then return o end
             end
         end
     end
@@ -416,52 +401,51 @@ local function findSellRemote()
 end
 
 local function buyLuckyArrow()
-    local char = LocalPlayer.Character
-    if not char then return false end
-    local money = getPlayerMoney()
-    if money == nil or money < LUCKY_ARROW_PRICE then return false end
-    local remote = char:FindFirstChild("RemoteEvent") or findSellRemote()
-    if not remote then return false end
-    local args = {"PurchaseShopItem", {["ItemName"] = "Lucky Arrow"}, 1, 2}
-    local success = pcall(function() remote:FireServer(unpack(args)) end)
-    if success then print(string.format("[AutoBuy] Куплен Lucky Arrow. Баланс: $%d", money)) end
-    return success
+    local c = LocalPlayer.Character
+    if not c then return false end
+    local m = getPlayerMoney()
+    if m == nil or m < LUCKY_ARROW_PRICE then return false end
+    local r = c:FindFirstChild("RemoteEvent") or findSellRemote()
+    if not r then return false end
+    local ok = pcall(function() r:FireServer("PurchaseShopItem", {["ItemName"] = "Lucky Arrow"}, 1, 2) end)
+    if ok then print(string.format("[AutoBuy] Куплен Lucky Arrow. $%d", m)) end
+    return ok
 end
 
 -- ============================================================
 -- 7. NOCLIP & SPEED
 -- ============================================================
-local noclipConnection = nil
+local noclipConn = nil
 local function applyNoclip()
-    local char = LocalPlayer.Character
-    if not char then return end
-    for _, part in ipairs(char:GetDescendants()) do
-        if part:IsA("BasePart") and part.CanCollide then part.CanCollide = false end
+    local c = LocalPlayer.Character
+    if not c then return end
+    for _, p in ipairs(c:GetDescendants()) do
+        if p:IsA("BasePart") and p.CanCollide then p.CanCollide = false end
     end
 end
 
 local function startNoclip()
-    if noclipConnection then return end
-    noclipConnection = RunService.Stepped:Connect(function()
+    if noclipConn then return end
+    noclipConn = RunService.Stepped:Connect(function()
         if State.Noclip then pcall(applyNoclip) end
     end)
 end
 
 local function stopNoclip()
-    if noclipConnection then noclipConnection:Disconnect(); noclipConnection = nil end
-    local char = LocalPlayer.Character
-    if char then
-        for _, part in ipairs(char:GetDescendants()) do
-            if part:IsA("BasePart") then part.CanCollide = true end
+    if noclipConn then noclipConn:Disconnect(); noclipConn = nil end
+    local c = LocalPlayer.Character
+    if c then
+        for _, p in ipairs(c:GetDescendants()) do
+            if p:IsA("BasePart") then p.CanCollide = true end
         end
     end
 end
 
 local function applySpeed()
-    local char = LocalPlayer.Character
-    if not char then return end
-    local hum = char:FindFirstChildOfClass("Humanoid")
-    if hum then hum.WalkSpeed = State.Speed and State.WalkSpeed or 16 end
+    local c = LocalPlayer.Character
+    if not c then return end
+    local h = c:FindFirstChildOfClass("Humanoid")
+    if h then h.WalkSpeed = State.Speed and State.WalkSpeed or 16 end
 end
 
 -- ============================================================
@@ -492,12 +476,12 @@ end)
 -- ============================================================
 -- 9. KAVO UI
 -- ============================================================
-local Window = Library.CreateLib("YBA Controller | v7.6", "BloodTheme")
+local Window = Library.CreateLib("YBA Controller | v7.7", "BloodTheme")
 
 local FarmTab = Window:NewTab("AutoFarm")
-local FarmSection = FarmTab:NewSection("Автоматизация")
+local FarmSec = FarmTab:NewSection("Автоматизация")
 
-FarmSection:NewToggle("★ AutoFarm", "Автоматический поиск и подбор предметов", function(v)
+FarmSec:NewToggle("★ AutoFarm", "Автоматический поиск и подбор предметов", function(v)
     State.AutoFarm = v
     if v then
         if not State.Noclip then State.Noclip = true; startNoclip() end
@@ -507,42 +491,42 @@ FarmSection:NewToggle("★ AutoFarm", "Автоматический поиск �
     end
 end)
 
-FarmSection:NewToggle("Авто-продажа", "Плавно летит к торговцу и продаёт всё", function(v)
+FarmSec:NewToggle("Авто-продажа", "Плавно летит к торговцу и продаёт всё", function(v)
     State.AutoSell = v
-    if v then print("[AutoSell] Включено. Лечу к торговцу при наличии предметов.") end
+    if v then print("[AutoSell] Включено.") end
 end)
 
-FarmSection:NewToggle("Авто-покупка Lucky Arrow", "Покупать при балансе $" .. LUCKY_ARROW_PRICE .. "+", function(v)
+FarmSec:NewToggle("Авто-покупка Lucky Arrow", "Покупать при балансе $" .. LUCKY_ARROW_PRICE .. "+", function(v)
     State.AutoBuyLucky = v
 end)
 
-FarmSection:NewSlider("Скорость полёта", "Скорость перемещения (AutoFarm)", 200, 30, function(v) State.FlySpeed = v end)
-FarmSection:NewSlider("Дистанция подбора", "На каком расстоянии подбирать", 10, 1, function(v) State.PickupRange = v end)
+FarmSec:NewSlider("Скорость полёта", "AutoFarm", 200, 30, function(v) State.FlySpeed = v end)
+FarmSec:NewSlider("Дистанция подбора", "Радиус подбора", 10, 1, function(v) State.PickupRange = v end)
 
 local VisualTab = Window:NewTab("Visuals")
-local VisualSection = VisualTab:NewSection("ESP")
-VisualSection:NewToggle("ESP предметов", "Подсвечивать предметы", function(v)
+local VisualSec = VisualTab:NewSection("ESP")
+VisualSec:NewToggle("ESP предметов", "Подсвечивать предметы", function(v)
     State.ESP = v
     if not v then clearAllESP() end
 end)
 
 local MoveTab = Window:NewTab("Movement")
-local MoveSection = MoveTab:NewSection("Скорость и коллизии")
-MoveSection:NewToggle("Noclip", "Проход сквозь стены", function(v)
+local MoveSec = MoveTab:NewSection("Скорость и коллизии")
+MoveSec:NewToggle("Noclip", "Проход сквозь стены", function(v)
     State.Noclip = v
     if v then startNoclip() else stopNoclip() end
 end)
-MoveSection:NewToggle("Ускорение", "Увеличить скорость ходьбы", function(v)
+MoveSec:NewToggle("Ускорение", "Увеличить WalkSpeed", function(v)
     State.Speed = v
     applySpeed()
 end)
-MoveSection:NewSlider("Скорость ходьбы", "Значение WalkSpeed", 150, 16, function(v)
+MoveSec:NewSlider("Скорость ходьбы", "WalkSpeed", 150, 16, function(v)
     State.WalkSpeed = v
     if State.Speed then applySpeed() end
 end)
 
 local ItemsTab = Window:NewTab("Items")
-local ItemsSection = ItemsTab:NewSection("Выбор предметов")
+local ItemsSec = ItemsTab:NewSection("Выбор предметов")
 local allItems = {
     "Rokakaka", "Lucky Arrow", "Caesar's Headband", "Clackers",
     "Ancient Scroll", "Diamond", "Dio's Diary", "Gold Coin",
@@ -550,18 +534,24 @@ local allItems = {
     "Quinton's Glove", "Rib Cage of The Saint's Corpse",
     "Steel Ball", "Stone Mask", "Zeppeli's Hat",
 }
-ItemsSection:NewDropdown("Добавить предмет", "Добавить в TARGET_ITEMS", allItems, function(selected)
-    local exists = false
+ItemsSec:NewDropdown("Добавить предмет", "В TARGET_ITEMS", allItems, function(sel)
     for _, item in ipairs(TARGET_ITEMS) do
-        if item:lower() == selected:lower() then exists = true; break end
+        if item:lower() == sel:lower() then return end
     end
-    if not exists then
-        table.insert(TARGET_ITEMS, selected)
-        print("[YBA] Добавлен: " .. selected)
-    end
+    table.insert(TARGET_ITEMS, sel)
+    print("[YBA] Добавлен: " .. sel)
 end)
 
-ItemsSection:NewButton("Debug: Показать ВИДИМЫЕ кнопки", "Откройте диалог с торговцем вручную и нажмите", function()
+-- Ручной запуск продажи (для теста)
+ItemsSec:NewButton("🧪 Тест: продать сейчас", "Запустить продажу вручную (без ожидания)", function()
+    lastSell = 0
+    isSelling = false
+    State.Busy = false
+    print("[Test] Ручной запуск AutoSell...")
+    task.spawn(autoSellItems)
+end)
+
+ItemsSec:NewButton("Debug: Показать ВИДИМЫЕ кнопки", "Откройте диалог и нажмите", function()
     print("=== ВИДИМЫЕ КНОПКИ ===")
     local pg = LocalPlayer:FindFirstChild("PlayerGui")
     for _, gui in ipairs(pg:GetChildren()) do
@@ -573,14 +563,15 @@ ItemsSection:NewButton("Debug: Показать ВИДИМЫЕ кнопки", "�
             end
         end
     end
-    print("=======================")
+    print("======================")
 end)
 
 local InfoTab = Window:NewTab("Info")
-local InfoSection = InfoTab:NewSection("О скрипте")
-InfoSection:NewLabel("YBA Controller v7.6")
-InfoSection:NewLabel("AutoSell: плавный полёт вместо телепорта")
-InfoSection:NewLabel("AutoFarm пауза, пока AutoSell летит к торговцу")
-InfoSection:NewLabel("Скорость полёта к торговцу: " .. FLY_TO_MERCHANT_SPEED)
+local InfoSec = InfoTab:NewSection("О скрипте")
+InfoSec:NewLabel("YBA Controller v7.7")
+InfoSec:NewLabel("AutoSell: клик через VirtualInputManager")
+InfoSec:NewLabel("Шаг 1: 'I'd like to sell this...'")
+InfoSec:NewLabel("Шаг 2: 'I'll sell ALL of these.'")
+InfoSec:NewLabel("Кнопка 'Тест: продать сейчас' для отладки")
 
-print("[YBA Controller] v7.6 загружена. Плавный полёт к торговцу активен.")
+print("[YBA Controller] v7.7 загружена. AutoSell через реальный клик мышью.")
